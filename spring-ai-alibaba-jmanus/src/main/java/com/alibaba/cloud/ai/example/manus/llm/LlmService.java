@@ -40,9 +40,9 @@ public class LlmService {
 
 	private final ChatClient finalizeChatClient;
 
-	private ChatMemory conversationMemory;
+	private ChatMemory conversationMemory = MessageWindowChatMemory.builder().maxMessages(1000).build();;
 
-	private ChatMemory agentMemory;
+	private ChatMemory agentMemory = MessageWindowChatMemory.builder().maxMessages(1000).build();;
 
 	private final ChatModel chatModel;
 

@@ -15,22 +15,34 @@
  */
 package com.alibaba.cloud.ai.example.manus.planning.creator;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
+import com.alibaba.cloud.ai.example.manus.agent.AgentState;
+import com.alibaba.cloud.ai.example.manus.agent.BaseAgent;
 import com.alibaba.cloud.ai.example.manus.config.ManusProperties;
 import com.alibaba.cloud.ai.example.manus.dynamic.agent.entity.DynamicAgentEntity;
 import com.alibaba.cloud.ai.example.manus.llm.LlmService;
 import com.alibaba.cloud.ai.example.manus.planning.model.vo.ExecutionContext;
 import com.alibaba.cloud.ai.example.manus.planning.model.vo.ExecutionPlan;
+import com.alibaba.cloud.ai.example.manus.planning.service.UserInputService;
 import com.alibaba.cloud.ai.example.manus.prompt.PromptLoader;
 import com.alibaba.cloud.ai.example.manus.recorder.PlanExecutionRecorder;
+import com.alibaba.cloud.ai.example.manus.recorder.entity.PlanExecutionRecord;
+import com.alibaba.cloud.ai.example.manus.tool.FormInputTool;
 import com.alibaba.cloud.ai.example.manus.tool.PlanningTool;
+import com.alibaba.cloud.ai.example.manus.tool.ToolCallBiFunctionDef;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClient.ChatClientRequestSpec;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 
@@ -49,20 +61,26 @@ public class PlanCreator {
 
 	private final PlanningTool planningTool;
 
+	private final FormInputTool formInputTool;
+
+	private final UserInputService userInputService;
+
 	protected final PlanExecutionRecorder recorder;
 
 	private final PromptLoader promptLoader;
 
 	private final ManusProperties manusProperties;
 
-	public PlanCreator(List<DynamicAgentEntity> agents, LlmService llmService, PlanningTool planningTool,
-					   PlanExecutionRecorder recorder, PromptLoader promptLoader, ManusProperties manusProperties) {
+	public PlanCreator(List<DynamicAgentEntity> agents, LlmService llmService, PlanningTool planningTool, FormInputTool formInputTool,
+					   PlanExecutionRecorder recorder, PromptLoader promptLoader, ManusProperties manusProperties, UserInputService userInputService) {
 		this.agents = agents;
 		this.llmService = llmService;
 		this.planningTool = planningTool;
+		this.formInputTool = formInputTool;
 		this.recorder = recorder;
 		this.promptLoader = promptLoader;
 		this.manusProperties = manusProperties;
+		this.userInputService = userInputService;
 	}
 
 	/**
@@ -77,11 +95,14 @@ public class PlanCreator {
 		if (planId == null || planId.isEmpty()) {
 			throw new IllegalArgumentException("Plan ID cannot be null or empty");
 		}
+		log.info("planId: {}", planId);
 		try {
 			// Build agent information
 			String agentsInfo = buildAgentsInfo(agents);
 			// Generate plan prompt
 			String planPrompt = generatePlanPrompt(context.getUserRequest(), agentsInfo);
+			// Human feedback
+			UserMessage humanFeedBackMessage = new UserMessage("");
 
 			ExecutionPlan executionPlan = null;
 			String outputText = null;
@@ -98,7 +119,8 @@ public class PlanCreator {
 
 					ChatClientRequestSpec requestSpec = llmService.getPlanningChatClient()
 							.prompt(prompt)
-							.toolCallbacks(List.of(PlanningTool.getFunctionToolCallback(planningTool)));
+							.messages(humanFeedBackMessage)
+							.toolCallbacks(List.of(PlanningTool.getFunctionToolCallback(planningTool), FormInputTool.getFunctionToolCallback(formInputTool)));
 					if (useMemory) {
 						requestSpec
 								.advisors(memoryAdvisor -> memoryAdvisor.param(CONVERSATION_ID, context.getPlanId()));
@@ -106,17 +128,46 @@ public class PlanCreator {
 								.advisors(MessageChatMemoryAdvisor.builder(llmService.getConversationMemory(manusProperties.getMaxMemory())).build());
 					}
 					ChatClient.CallResponseSpec response = requestSpec.call();
-					outputText = response.chatResponse().getResult().getOutput().getText();
+					ChatResponse chatResponse = response.chatResponse();
+					outputText =  chatResponse.getResult().getOutput().getText();
+					log.info("outputText: {}", outputText);
 
 					executionPlan = planningTool.getCurrentPlan();
 
 					if (executionPlan != null) {
 						// Set the user input part of the plan, for later storage and use.
 						executionPlan.setUserRequest(context.getUserRequest());
+						userInputService.removeFormInputTool(planId);
 						log.info("Plan created successfully on attempt {}: {}", attempt, executionPlan);
 						break;
 					}
 					else {
+						// waiting human feed back
+						if (formInputTool.getInputState() == FormInputTool.InputState.AWAITING_USER_INPUT) {
+
+							PlanExecutionRecord record = recorder.getExecutionRecord(planId);
+							if (record == null) {
+								record = new PlanExecutionRecord(context.getPlanId());
+							}
+							List<String> steps = record.getSteps();
+							steps.add("await user input");
+							recorder.recordPlanExecution(record);
+
+							userInputService.storeFormInputTool(planId, formInputTool);
+
+							waitForUserInputOrTimeout(formInputTool);
+
+							if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_RECEIVED) {
+								humanFeedBackMessage = UserMessage.builder()
+										.text("User input received for form: " + formInputTool.getCurrentToolStateString())
+										.build();
+							}
+							else if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
+								humanFeedBackMessage = UserMessage.builder()
+										.text("Input timeout occurred for form: ")
+										.build();
+							}
+						}
 						log.warn("Plan creation attempt {} failed: planningTool.getCurrentPlan() returned null",
 								attempt);
 						if (attempt == maxRetries) {
@@ -181,6 +232,35 @@ public class PlanCreator {
 	private String generatePlanPrompt(String request, String agentsInfo) {
 		Map<String, Object> variables = Map.of("agentsInfo", agentsInfo, "request", request);
 		return promptLoader.renderPrompt("planning/plan-creation.txt", variables);
+	}
+
+	private void waitForUserInputOrTimeout(FormInputTool formInputTool) {
+		long startTime = System.currentTimeMillis();
+		// Get timeout from ManusProperties and convert to milliseconds
+		long userInputTimeoutMs = 300000L;
+
+		while (formInputTool.getInputState() == FormInputTool.InputState.AWAITING_USER_INPUT) {
+			if (System.currentTimeMillis() - startTime > userInputTimeoutMs) {
+				formInputTool.handleInputTimeout(); // This will change its state to
+				// INPUT_TIMEOUT
+				break;
+			}
+			try {
+				// Poll for input state change. In a real scenario, this might involve
+				// a more sophisticated mechanism like a Future or a callback from the UI.
+				TimeUnit.MILLISECONDS.sleep(500); // Check every 500ms
+			}
+			catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				formInputTool.handleInputTimeout(); // Treat interruption as timeout for
+				// simplicity
+				break;
+			}
+		}
+		if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_RECEIVED) {
+		}
+		else if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
+		}
 	}
 
 }

@@ -28,6 +28,7 @@ import com.alibaba.cloud.ai.example.manus.planning.coordinator.PlanningCoordinat
 import com.alibaba.cloud.ai.example.manus.planning.creator.PlanCreator;
 import com.alibaba.cloud.ai.example.manus.planning.executor.PlanExecutor;
 import com.alibaba.cloud.ai.example.manus.planning.finalizer.PlanFinalizer;
+import com.alibaba.cloud.ai.example.manus.planning.service.UserInputService;
 import com.alibaba.cloud.ai.example.manus.prompt.PromptLoader;
 import com.alibaba.cloud.ai.example.manus.recorder.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.example.manus.tool.DocLoaderTool;
@@ -106,6 +107,9 @@ public class PlanningFactory {
 	@Autowired
 	private PromptLoader promptLoader;
 
+	@Autowired
+	private UserInputService userInputService;
+
 	public PlanningFactory(ChromeDriverService chromeDriverService, PlanExecutionRecorder recorder,
 			ManusProperties manusProperties, TextFileService textFileService, McpService mcpService) {
 		this.chromeDriverService = chromeDriverService;
@@ -121,8 +125,9 @@ public class PlanningFactory {
 		List<DynamicAgentEntity> agentEntities = dynamicAgentLoader.getAllAgents();
 
 		PlanningTool planningTool = new PlanningTool();
+		FormInputTool formInputTool = new FormInputTool();
 
-		PlanCreator planCreator = new PlanCreator(agentEntities, llmService, planningTool, recorder, promptLoader, manusProperties);
+		PlanCreator planCreator = new PlanCreator(agentEntities, llmService, planningTool, formInputTool, recorder, promptLoader, manusProperties, userInputService);
 		PlanExecutor planExecutor = new PlanExecutor(agentEntities, recorder, agentService, llmService, manusProperties);
 		PlanFinalizer planFinalizer = new PlanFinalizer(llmService, recorder, promptLoader, manusProperties);
 

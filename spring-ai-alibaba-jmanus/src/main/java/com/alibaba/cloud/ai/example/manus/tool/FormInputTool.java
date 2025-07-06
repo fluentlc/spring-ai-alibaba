@@ -22,6 +22,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.tool.function.FunctionToolCallback;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 
 import java.util.HashMap;
 import java.util.List;
@@ -72,6 +74,16 @@ public class FormInputTool implements ToolCallBiFunctionDef<FormInputTool.UserFo
 	public static OpenAiApi.FunctionTool getToolDefinition() {
 		OpenAiApi.FunctionTool.Function function = new OpenAiApi.FunctionTool.Function(description, name, PARAMETERS);
 		return new OpenAiApi.FunctionTool(function);
+	}
+
+	// Parameterized FunctionToolCallback with appropriate types.\
+	public static FunctionToolCallback<?, ToolExecuteResult> getFunctionToolCallback(FormInputTool toolInstance) {
+		return FunctionToolCallback.builder(name, toolInstance)
+				.description(description)
+				.inputSchema(PARAMETERS)
+				.inputType(UserFormInput.class)
+				.toolMetadata(ToolMetadata.builder().returnDirect(true).build())
+				.build();
 	}
 
 	// Data structures:
