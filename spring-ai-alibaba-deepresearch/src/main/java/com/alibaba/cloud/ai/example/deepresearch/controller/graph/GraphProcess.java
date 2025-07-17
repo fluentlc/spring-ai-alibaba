@@ -16,14 +16,9 @@
 
 package com.alibaba.cloud.ai.example.deepresearch.controller.graph;
 
-import com.alibaba.cloud.ai.example.deepresearch.model.req.ChatRequest;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.NodeOutput;
-import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.async.AsyncGenerator;
-import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
-import com.alibaba.cloud.ai.graph.state.StateSnapshot;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
@@ -52,17 +47,6 @@ public class GraphProcess {
 
 	public GraphProcess(CompiledGraph compiledGraph) {
 		this.compiledGraph = compiledGraph;
-	}
-
-	public void handleHumanFeedback(ChatRequest chatRequest, Map<String, Object> objectMap,
-			RunnableConfig runnableConfig, Sinks.Many<ServerSentEvent<String>> sink) throws GraphRunnerException {
-		objectMap.put("feed_back", chatRequest.interruptFeedback());
-		StateSnapshot stateSnapshot = compiledGraph.getState(runnableConfig);
-		OverAllState state = stateSnapshot.state();
-		state.withResume();
-		state.withHumanFeedback(new OverAllState.HumanFeedback(objectMap, "research_team"));
-		AsyncGenerator<NodeOutput> resultFuture = compiledGraph.streamFromInitialNode(state, runnableConfig);
-		processStream(resultFuture, sink);
 	}
 
 	public void processStream(AsyncGenerator<NodeOutput> generator, Sinks.Many<ServerSentEvent<String>> sink) {

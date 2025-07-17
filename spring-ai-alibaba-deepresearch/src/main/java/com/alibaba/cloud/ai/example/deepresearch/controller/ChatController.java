@@ -39,7 +39,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
@@ -99,17 +98,11 @@ public class ChatController {
 		Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().unicast().onBackpressureBuffer();
 
 		GraphProcess graphProcess = new GraphProcess(this.compiledGraph);
-		// Handle human feedback if auto-accept is disabled and feedback is provided
-		if (!chatRequest.autoAcceptPlan() && StringUtils.hasText(chatRequest.interruptFeedback())) {
-			graphProcess.handleHumanFeedback(chatRequest, objectMap, runnableConfig, sink);
-		}
-		// First question
-		else {
-			ChatRequestProcess.initializeObjectMap(chatRequest, objectMap);
-			logger.info("init inputs: {}", objectMap);
-			AsyncGenerator<NodeOutput> resultFuture = compiledGraph.stream(objectMap, runnableConfig);
-			graphProcess.processStream(resultFuture, sink);
-		}
+
+		ChatRequestProcess.initializeObjectMap(chatRequest, objectMap);
+		logger.info("init inputs: {}", objectMap);
+		AsyncGenerator<NodeOutput> resultFuture = compiledGraph.stream(objectMap, runnableConfig);
+		graphProcess.processStream(resultFuture, sink);
 
 		return sink.asFlux()
 			.doOnCancel(() -> logger.info("Client disconnected from stream"))
